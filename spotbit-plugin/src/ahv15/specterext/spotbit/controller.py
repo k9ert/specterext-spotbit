@@ -21,6 +21,12 @@ def index():
     return render_template(
         "spotbit/index.jinja",
     )
+    
+    
+@spotbit_endpoint.route("/hist/<currency>/<exchange>/<date_start>/<date_end>")
+def historical_exchange_rate(currency, exchange, date_start, date_end):
+    service = ext()
+    return(service.historical_exchange_rate(currency, exchange, date_start, date_end))
 
 @spotbit_endpoint.route("/now/<currency>/<exchange>")
 def current_exchange_rate(currency, exchange):
