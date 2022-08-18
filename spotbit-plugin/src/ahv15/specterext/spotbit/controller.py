@@ -4,6 +4,8 @@ from flask import current_app as app
 from cryptoadvance.specter.specter import Specter
 from .service import SpotbitService
 
+from  datetime import datetime
+
 
 spotbit_endpoint = SpotbitService.blueprint
 
@@ -41,13 +43,20 @@ def settings_get():
 
 @spotbit_endpoint.route("/settings", methods=["POST"])
 def settings_post():
-    keepWeeks = request.form["keepWeeks"]
-    exchanges = request.form["exchanges"]
-    currencies = request.form["currencies"]
-    interval = request.form["interval"]
+    print(request.values)
+    exchange1 = request.form.get('exchange1', "None")
+    exchange2 = request.form.get('exchange2', "None")
+    exchange3 = request.form.get('exchange3', "None")
+    exchange4 = request.form.get('exchange4', "None")
+    currency1 = request.form.get('currency1', "None")
+    currency2 = request.form.get('currency2', "None")
+    currency3 = request.form.get('currency3', "None")
+    currency4 = request.form.get('currency4', "None")
+    start_date = request.form.get('start_date', "None")
+    frequencies = request.form.get('frequencies', "None")
     service = ext()
-    service.scheduler.scheduler.modify_job(job_id = 'prune', args = [keepWeeks])
-    service.init_table()
+    service.scheduler.scheduler.modify_job(job_id = 'prune', args = [datetime.timestamp(start_date)])
+    service.init_table([exchange1, exchange2, exchange3, exchange4], [currency1, currency2, currency3, currency4], frequencies)
     '''
     user = app.specter.user_manager.get_user()
     if show_menu == "yes":

@@ -14,6 +14,8 @@ from cryptoadvance.specter.services.service import Service, devstatus_alpha
 from flask_apscheduler import APScheduler
 
 logger = logging.getLogger(__name__)
+path = Path("./sb.db")
+path_hist = Path("./sb_hist.db")
 
 
 # https://stackoverflow.com/a/58616001
@@ -96,6 +98,87 @@ async def fetch_ohlcv(exchange, symbol, timeframe, limit, exchange_name):
             return [exchange_name, symbol, ohlcv]
     except Exception as e:
         print(type(e).__name__, str(e))
+
+
+def request_history(objects, exchange, currency, start_date, end_date, frequencies):
+    db_n = sqlite3.connect(path_hist, timeout=10)
+    cur = db_n.cursor()
+    ticker = get_supported_pair_for(currency, objects[exchange])
+    while start_date < end_date:
+        params = {'start': start_date, 'end': int(end_date)}
+        tick = objects[exchange].fetch_ohlcv(symbol=ticker, timeframe='1m', params=params, limit = 1000)
+        records = []
+        dt = None
+        for line in tick:
+            dt = None
+            try:
+                if is_ms(int(line['timestamp'])):
+                    dt = datetime.fromtimestamp(line['timestamp'] / 1e3)
+                else:
+                    dt = datetime.fromtimestamp(line['timestamp'])
+                records.append([line['timestamp'], dt, ticker, 0.0, 0.0, 0.0, line['last'], 0.0])
+            except TypeError:
+                if line[0] % 1000 == 0:
+                    dt = datetime.fromtimestamp(line[0] / 1e3)
+                else:
+                    dt = datetime.fromtimestamp(line[0])
+                records.append([line[0], dt, ticker, line[1], line[2], line[3], line[4], line[5]])
+        statement = f"INSERT INTO {exchange} (timestamp, datetime, pair, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?, ?);"
+        cur.executemany(statement, records)
+        db_n.commit()
+        l = len(tick)
+        end_date = int(datetime.timestamp(datetime.fromtimestamp(end_date) - timedelta(minutes=l)))
+
+def request_history_periodically(histExchanges, frequencies):
+    history_threads = []
+    historyEnd = 0
+    for h in histExchanges:
+        hThread = threading.Thread(target=request_history, args=(objects, h, "USD", historyEnd, datetime.now().timestamp(), frequencies))
+        hThread.start()
+        history_threads.append(hThread)
+    return history_threads
+
+async def request(exchanges, currencies):
+    while True:
+        loops = []
+        for e in exchanges:
+            for curr in currencies:
+                    if(currencies == "None"):
+                        continue
+                    ticker = get_supported_pair_for(curr, objects[e])
+                    if(ticker == ''):
+                        continue
+                    if async_objects[e].has['fetchOHLCV']:
+                        tframe = '1m'
+                        lim = 1
+                        if e == "bleutrade" or e == "btcalpha" or e == "rightbtc" or e == "hollaex":
+                            tframe = '1h'
+                        if e == "poloniex":
+                            tframe = '5m'
+                        try:
+                            loops.append(fetch_ohlcv(async_objects[e], ticker, tframe, lim, e))
+                        except Exception as err:
+                            if "does not have" not in str(err):
+                                print(f"error fetching candle: {e} {curr} {err}")
+        responses = await gather(*loops)
+        db_n = sqlite3.connect(path, timeout=30)
+        cursor = db_n.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        if(cursor.fetchall() == []):
+            continue
+        for response in responses:
+            datetime_ = []
+            for line in response[2]:
+                datetime_.append(datetime.fromtimestamp(line[0]/1e3)) #check here if we have a ms timestamp or not
+                for l in line:
+                    if l == None:
+                        l = 0
+            statement = "INSERT INTO {} (timestamp, datetime, pair, open, high, low, close, volume) VALUES ({}, '{}', '{}', {}, {}, {}, {}, {});".format(response[0], response[2][0][0], datetime_, response[1], response[2][0][1], response[2][0][2], response[2][0][3], response[2][0][4], response[2][0][5])
+            db_n.execute(statement)
+            db_n.commit()
+        for each_exchange in async_objects.values():
+            await each_exchange.close()
+        await asyncio.sleep(60)
                     
 class SpotbitService(Service):
     id = "spotbit"
@@ -112,90 +195,8 @@ class SpotbitService(Service):
     SPECTER_WALLET_ALIAS = "wallet"
     
     def callback_after_serverpy_init_app(self, scheduler: APScheduler):
-        path = Path("./sb.db")
-        path_hist = Path("./sb_hist.db")
-        
-        def request_history(objects, exchange, currency, start_date, end_date):
-            db_n = sqlite3.connect(path_hist, timeout=10)
-            cur = db_n.cursor()
-            ticker = get_supported_pair_for(currency, objects[exchange])
-            while start_date < end_date:
-                params = {'start': start_date, 'end': int(end_date)}
-                tick = objects[exchange].fetch_ohlcv(symbol=ticker, timeframe='1m', params=params, limit = 1000)
-                records = []
-                dt = None
-                for line in tick:
-                    dt = None
-                    try:
-                        if is_ms(int(line['timestamp'])):
-                            dt = datetime.fromtimestamp(line['timestamp'] / 1e3)
-                        else:
-                            dt = datetime.fromtimestamp(line['timestamp'])
-                        records.append([line['timestamp'], dt, ticker, 0.0, 0.0, 0.0, line['last'], 0.0])
-                    except TypeError:
-                        if line[0] % 1000 == 0:
-                            dt = datetime.fromtimestamp(line[0] / 1e3)
-                        else:
-                            dt = datetime.fromtimestamp(line[0])
-                        records.append([line[0], dt, ticker, line[1], line[2], line[3], line[4], line[5]])
-                statement = f"INSERT INTO {exchange} (timestamp, datetime, pair, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?, ?);"
-                cur.executemany(statement, records)
-                db_n.commit()
-                l = len(tick)
-                end_date = int(datetime.timestamp(datetime.fromtimestamp(end_date) - timedelta(minutes=l)))
-        
-        def request_history_periodically(histExchanges):
-            history_threads = []
-            historyEnd = 0
-            for h in histExchanges:
-                hThread = threading.Thread(target=request_history, args=(objects, h, "USD", historyEnd, datetime.now().timestamp()))
-                hThread.start()
-                history_threads.append(hThread)
-            return history_threads
-        
-        async def request(objects, async_objects):
-            while True:
-                currencies      = ["usd", "gbp", "jpy", "usdt", "eur", "0xcafebabe"]
-                loops = []
-                for e in exchanges:
-                    for curr in currencies:
-                            ticker = get_supported_pair_for(curr, objects[e])
-                            if(ticker == ''):
-                                continue
-                            if async_objects[e].has['fetchOHLCV']:
-                                tframe = '1m'
-                                lim = 1
-                                if e == "bleutrade" or e == "btcalpha" or e == "rightbtc" or e == "hollaex":
-                                    tframe = '1h'
-                                if e == "poloniex":
-                                    tframe = '5m'
-                                try:
-                                    loops.append(fetch_ohlcv(async_objects[e], ticker, tframe, lim, e))
-                                except Exception as err:
-                                    if "does not have" not in str(err):
-                                        print(f"error fetching candle: {e} {curr} {err}")
-                responses = await gather(*loops)
-                db_n = sqlite3.connect(path, timeout=30)
-                cursor = db_n.cursor()
-                cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-                if(cursor.fetchall() == []):
-                    continue
-                for response in responses:
-                    datetime_ = []
-                    for line in response[2]:
-                        datetime_.append(datetime.fromtimestamp(line[0]/1e3)) #check here if we have a ms timestamp or not
-                        for l in line:
-                            if l == None:
-                                l = 0
-                    statement = "INSERT INTO {} (timestamp, datetime, pair, open, high, low, close, volume) VALUES ({}, '{}', '{}', {}, {}, {}, {}, {});".format(response[0], response[2][0][0], datetime_, response[1], response[2][0][1], response[2][0][2], response[2][0][3], response[2][0][4], response[2][0][5])
-                    db_n.execute(statement)
-                    db_n.commit()
-                for each_exchange in async_objects.values():
-                    await each_exchange.close()
-                await asyncio.sleep(60)
-                          
-        
-        def prune(keepWeeks):
+
+        def prune(start_date):
             with scheduler.app.app_context():
                 db_n = sqlite3.connect(path, timeout=10)
                 for exchange in exchanges:
@@ -204,32 +205,25 @@ class SpotbitService(Service):
                     check_ts = cursor.fetchone()
                     statement = ""
                     if check_ts[0] is not None:
-                        if is_ms(int(check_ts[0])):
-                            cutoff = (datetime.now()-timedelta(weeks=int(keepWeeks))).timestamp()*1000
-                            statement = f"DELETE FROM {exchange} WHERE timestamp < {cutoff};"
-                        else:
-                            cutoff = (datetime.now()-timedelta(weeks=int(keepWeeks))).timestamp()
-                            statement = f"DELETE FROM {exchange} WHERE timestamp < {cutoff};"
-                        while True:
-                            try:
-                                db_n.execute(statement)
-                                break
-                            except sqlite3.OperationalError as op:
-                                print(f"{op}")
+                        statement = f"DELETE FROM {exchange} WHERE timestamp < {start_date};"
+                        try:
+                            db_n.execute(statement)
+                            break
+                        except sqlite3.OperationalError as op:
+                            print(f"{op}")
                         db_n.commit()
-        
-        SpotbitService.init_table()
-        run_coroutine(request(objects, async_objects))
-        request_history_periodically(historicalExchanges)
-        scheduler.add_job("prune", prune, trigger = 'interval', args = [10], minutes = 1)
+                        
+        scheduler.add_job("prune", prune, trigger = 'interval', args = [0], minutes = 1)
         self.scheduler = scheduler                   
 
  
     @classmethod
-    def init_table(cls):
+    def init_table(cls, exchanges, currencies, frequencies):
         p = Path("./sb.db")
         db = sqlite3.connect(p)
         for exchange in exchanges:
+            if(exchange == "None"):
+                continue
             sql = f"CREATE TABLE IF NOT EXISTS {exchange} (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER, datetime TEXT, pair TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL)"
             print(f"created table for {exchange}")
             db.execute(sql)
@@ -244,6 +238,9 @@ class SpotbitService(Service):
             db.execute(sql)
             db.commit()
         db.close()
+        
+        run_coroutine(request(exchanges, currencies))
+        request_history_periodically(historicalExchanges, frequencies)
 
     @classmethod
     def current_exchange_rate(cls, currency, exchange):
