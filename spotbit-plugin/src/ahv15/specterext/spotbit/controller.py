@@ -55,7 +55,7 @@ def settings_post():
     start_date = request.form.get('start_date', "None")
     frequencies = request.form.get('frequencies', "None")
     service = ext()
-    service.scheduler.scheduler.modify_job(job_id = 'prune', args = [datetime.timestamp(start_date)])
+    service.scheduler.scheduler.modify_job(job_id = 'prune', args = [datetime.timestamp(datetime. strptime(start_date, '%Y-%m-%d'))])
     service.init_table([exchange1, exchange2, exchange3, exchange4], [currency1, currency2, currency3, currency4], frequencies)
     '''
     user = app.specter.user_manager.get_user()
