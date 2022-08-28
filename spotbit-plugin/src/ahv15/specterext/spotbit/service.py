@@ -1,78 +1,30 @@
 import logging
 import ccxt as ccxt
-import ccxt.async_support as ccxt_async
 import sqlite3
 from pathlib import Path
 import time
 from  datetime import datetime, timedelta
-import asyncio
-from asyncio import gather
 import threading
-import itertools
+from threading import Event
+import os
 
 from cryptoadvance.specter.services.service import Service, devstatus_alpha
-from flask_apscheduler import APScheduler
 
 logger = logging.getLogger(__name__)
 path = Path("./sb.db")
 path_hist = Path("./sb_hist.db")
 
 
-# https://stackoverflow.com/a/58616001
 
-class EventLoopThread(threading.Thread):
-    loop = None
-    _count = itertools.count(0)
-
-    def __init__(self):
-        self.started = threading.Event()
-        name = f"{type(self).__name__}-{next(self._count)}"
-        super().__init__(name=name, daemon=True)
-
-    def run(self):
-        self.loop = loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.call_later(0, self.started.set)
-
-        try:
-            loop.run_forever()
-        finally:
-            try:
-                shutdown_asyncgens = loop.shutdown_asyncgens()
-            except AttributeError:
-                pass
-            else:
-                loop.run_until_complete(shutdown_asyncgens)
-            try:
-                shutdown_executor = loop.shutdown_default_executor()
-            except AttributeError:
-                pass
-            else:
-                loop.run_until_complete(shutdown_executor)
-            asyncio.set_event_loop(None)
-            loop.close()
-
-_lock = threading.Lock()
-_loop_thread = None
-
-def get_event_loop():
-    global _loop_thread
-    if _loop_thread is None:
-        with _lock:
-            if _loop_thread is None:
-                _loop_thread = EventLoopThread()
-                _loop_thread.start()
-                _loop_thread.started.wait(1)
-
-    return _loop_thread.loop
-
-def run_coroutine(coro):
-    return asyncio.run_coroutine_threadsafe(coro, get_event_loop())
-
-objects = {"aax":ccxt.aax(), "ascendex": ccxt.ascendex(),"bequant":ccxt.bequant(), "bibox":ccxt.bibox(), "bigone":ccxt.bigone(), "binance":ccxt.binance(), "bitbank":ccxt.bitbank(), "liquid":ccxt.liquid(), "phemex":ccxt.phemex(), "bitstamp":ccxt.bitstamp(), "ftx":ccxt.ftx()}
-async_objects = {"aax":ccxt_async.aax(), "ascendex": ccxt_async.ascendex(),"bequant":ccxt_async.bequant(), "bibox":ccxt_async.bibox(), "bigone":ccxt_async.bigone(), "binance":ccxt_async.binance(), "bitbank":ccxt_async.bitbank(), "liquid":ccxt_async.liquid(), "phemex":ccxt_async.phemex(), "bitstamp":ccxt_async.bitstamp(), "ftx":ccxt_async.ftx()}
-exchanges = ["binance", "ascendex", "bequant", "bibox","bigone", "bitstamp"]
-historicalExchanges = ["bitstamp"]
+objects = {"bitstamp":ccxt.bitstamp(), "bitfinex":ccxt.bitfinex(), "coinbase":ccxt.coinbase(), "kraken":ccxt.kraken(), "okcoin":ccxt.okcoin()}
+exchanges = ['bitstamp', 'coinbase', 'kraken', 'bitfinex', 'okcoin']
+currencies = ['usd', 'eur']
+history_threads = []
+event = "None"
+chosen_exchanges = []
+chosen_currencies = {}
+frequency_config = 0
+start_date_config = 0
 
 def is_ms(timestamp):
     if timestamp % 1000 == 0:
@@ -90,95 +42,113 @@ def get_supported_pair_for(currency, exchange):
             result = market['symbol']
     return result
 
-async def fetch_ohlcv(exchange, symbol, timeframe, limit, exchange_name):
-    since = None
-    try:
-        ohlcv = await exchange.fetch_ohlcv(symbol, timeframe, since, limit)
-        if len(ohlcv):
-            return [exchange_name, symbol, ohlcv]
-    except Exception as e:
-        print(type(e).__name__, str(e))
-
-
-def request_history(objects, exchange, currency, start_date, end_date, frequencies):
+def clear_threads(event):
+    if (event != "None"):
+        event.set()
+    
+    
+def request_history(objects, exchange, currency, start_date, end_date, frequency, event):
     db_n = sqlite3.connect(path_hist, timeout=10)
     cur = db_n.cursor()
     ticker = get_supported_pair_for(currency, objects[exchange])
-    while start_date < end_date:
-        params = {'start': start_date, 'end': int(end_date)}
-        tick = objects[exchange].fetch_ohlcv(symbol=ticker, timeframe='1m', params=params, limit = 1000)
-        records = []
-        dt = None
-        for line in tick:
+    true_end_date = end_date
+    while(True):
+        while start_date < end_date:
+            if event.is_set():
+                return
+            params = {'start': int(start_date), 'end': int(end_date)}
+            tick = objects[exchange].fetch_ohlcv(symbol=ticker, timeframe=frequency, params=params, limit = 1000)
+            records = []
             dt = None
-            try:
-                if is_ms(int(line['timestamp'])):
-                    dt = datetime.fromtimestamp(line['timestamp'] / 1e3)
-                else:
-                    dt = datetime.fromtimestamp(line['timestamp'])
-                records.append([line['timestamp'], dt, ticker, 0.0, 0.0, 0.0, line['last'], 0.0])
-            except TypeError:
-                if line[0] % 1000 == 0:
-                    dt = datetime.fromtimestamp(line[0] / 1e3)
-                else:
-                    dt = datetime.fromtimestamp(line[0])
-                records.append([line[0], dt, ticker, line[1], line[2], line[3], line[4], line[5]])
-        statement = f"INSERT INTO {exchange} (timestamp, datetime, pair, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?, ?);"
-        cur.executemany(statement, records)
-        db_n.commit()
-        l = len(tick)
-        end_date = int(datetime.timestamp(datetime.fromtimestamp(end_date) - timedelta(minutes=l)))
+            for line in tick:
+                dt = None
+                try:
+                    if is_ms(int(line['timestamp'])):
+                        dt = datetime.fromtimestamp(line['timestamp'] / 1e3)
+                    else:
+                        dt = datetime.fromtimestamp(line['timestamp'])
+                    records.append([line['timestamp'], dt, ticker, 0.0, 0.0, 0.0, line['last'], 0.0])
+                except TypeError:
+                    if line[0] % 1000 == 0:
+                        dt = datetime.fromtimestamp(line[0] / 1e3)
+                    else:
+                        dt = datetime.fromtimestamp(line[0])
+                    records.append([line[0], dt, ticker, line[1], line[2], line[3], line[4], line[5]])
+            statement = f"INSERT INTO {exchange} (timestamp, datetime, pair, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?, ?);"
+            cur.executemany(statement, records)
+            db_n.commit()
+            l = len(tick)
+            end_date = int(datetime.timestamp(datetime.fromtimestamp(end_date) - timedelta(minutes=l)))
+        time.sleep(60)
+        start_date = true_end_date
+        end_date = datetime.now().timestamp()
+        true_end_date = end_date
 
-def request_history_periodically(histExchanges, frequencies):
-    history_threads = []
-    historyEnd = 0
+def request_history_periodically(histExchanges, currencies, frequency, start_date,  event):
     for h in histExchanges:
-        hThread = threading.Thread(target=request_history, args=(objects, h, "USD", historyEnd, datetime.now().timestamp(), frequencies))
-        hThread.start()
-        history_threads.append(hThread)
+        for currency in currencies[h]:
+            hThread = threading.Thread(target=request_history, args=(objects, h, currency, int(start_date), datetime.now().timestamp(), frequency, event))
+            hThread.start()
+            history_threads.append(hThread)
     return history_threads
 
-async def request(exchanges, currencies):
+
+def request_periodically(exchanges, currencies, event):
+    thread = threading.Thread(target=request, args=(exchanges, currencies, event))
+    thread.start()
+    return thread
+
+def request(exchanges, currencies, event):
     while True:
-        loops = []
+        if event.is_set():
+            break
+        candles = []
         for e in exchanges:
-            for curr in currencies:
+            for curr in currencies[e]:
                     if(currencies == "None"):
                         continue
                     ticker = get_supported_pair_for(curr, objects[e])
                     if(ticker == ''):
                         continue
-                    if async_objects[e].has['fetchOHLCV']:
+                    if objects[e].has['fetchOHLCV']:
                         tframe = '1m'
                         lim = 1
-                        if e == "bleutrade" or e == "btcalpha" or e == "rightbtc" or e == "hollaex":
-                            tframe = '1h'
-                        if e == "poloniex":
-                            tframe = '5m'
                         try:
-                            loops.append(fetch_ohlcv(async_objects[e], ticker, tframe, lim, e))
+                            candles.append([e, ticker, objects[e].fetch_ohlcv(symbol=ticker, timeframe=tframe, since=None, limit=lim)])
                         except Exception as err:
                             if "does not have" not in str(err):
                                 print(f"error fetching candle: {e} {curr} {err}")
-        responses = await gather(*loops)
+                    else:
+                        print("check4")
+                        try:
+                            price = objects[e].fetch_ticker(ticker)
+                            print("check")
+                            print(price)
+                            candles.append(e, ticker, [[price['timestamp'], 0.0, 0.0, 0.0, price['last'], 0.0]])
+                        except Exception as err:
+                            print(f"error fetching ticker: {err}")
         db_n = sqlite3.connect(path, timeout=30)
         cursor = db_n.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
         if(cursor.fetchall() == []):
             continue
-        for response in responses:
+        for response in candles:
             datetime_ = []
-            for line in response[2]:
-                datetime_.append(datetime.fromtimestamp(line[0]/1e3)) #check here if we have a ms timestamp or not
-                for l in line:
-                    if l == None:
-                        l = 0
+            ts = None
+            try:
+                if is_ms(int(response[2][0][0])):
+                    datetime_ = datetime.fromtimestamp(int(response[2][0][0])/1e3)
+                else:
+                    datetime_ = datetime.fromtimestamp(int(response[2][0][0]))
+            except OverflowError as oe:
+                print(f"{oe} caused by {ts}")
+            for l in response[2][0]:
+                if l == None:
+                    l = 0
             statement = "INSERT INTO {} (timestamp, datetime, pair, open, high, low, close, volume) VALUES ({}, '{}', '{}', {}, {}, {}, {}, {});".format(response[0], response[2][0][0], datetime_, response[1], response[2][0][1], response[2][0][2], response[2][0][3], response[2][0][4], response[2][0][5])
             db_n.execute(statement)
             db_n.commit()
-        for each_exchange in async_objects.values():
-            await each_exchange.close()
-        await asyncio.sleep(60)
+        time.sleep(60)
                     
 class SpotbitService(Service):
     id = "spotbit"
@@ -191,39 +161,20 @@ class SpotbitService(Service):
     devstatus = devstatus_alpha
     isolated_client = False
     sort_priority = 2
+    SPECTER_WALLET_ALIAS = "wallet"                
 
-    SPECTER_WALLET_ALIAS = "wallet"
-    
-    def callback_after_serverpy_init_app(self, scheduler: APScheduler):
-
-        def prune(start_date):
-            with scheduler.app.app_context():
-                db_n = sqlite3.connect(path, timeout=10)
-                for exchange in exchanges:
-                    check = f"SELECT MAX(timestamp) FROM {exchange};"
-                    cursor = db_n.execute(check)
-                    check_ts = cursor.fetchone()
-                    statement = ""
-                    if check_ts[0] is not None:
-                        statement = f"DELETE FROM {exchange} WHERE timestamp < {start_date};"
-                        try:
-                            db_n.execute(statement)
-                            break
-                        except sqlite3.OperationalError as op:
-                            print(f"{op}")
-                        db_n.commit()
-                        
-        scheduler.add_job("prune", prune, trigger = 'interval', args = [0], minutes = 1)
-        self.scheduler = scheduler                   
-
- 
     @classmethod
-    def init_table(cls, exchanges, currencies, frequencies):
+    def init_table(cls, exchanges, currencies, frequency, start_date):
+        global event
+        global frequency_config
+        global start_date_config        
         p = Path("./sb.db")
         db = sqlite3.connect(p)
         for exchange in exchanges:
             if(exchange == "None"):
                 continue
+            if (exchange not in chosen_exchanges):
+                chosen_exchanges.append(exchange)
             sql = f"CREATE TABLE IF NOT EXISTS {exchange} (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER, datetime TEXT, pair TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL)"
             print(f"created table for {exchange}")
             db.execute(sql)
@@ -232,15 +183,32 @@ class SpotbitService(Service):
         
         p = Path("./sb_hist.db")
         db = sqlite3.connect(p)
-        for exchange in historicalExchanges:
+        for exchange in exchanges:
             sql = f"CREATE TABLE IF NOT EXISTS {exchange} (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER, datetime TEXT, pair TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL)"
             print(f"created table for {exchange}")
             db.execute(sql)
             db.commit()
         db.close()
         
-        run_coroutine(request(exchanges, currencies))
-        request_history_periodically(historicalExchanges, frequencies)
+        for exchange in exchanges:
+            if(exchange == "None"):
+                continue
+            for currency in currencies:
+                if(currency == "None"):
+                    continue
+                if(chosen_currencies.__contains__(exchange)):
+                    if(currency not in chosen_currencies[exchange]):
+                        chosen_currencies[exchange].append(currency)
+                else:
+                    chosen_currencies[exchange] = [currency]
+        
+        clear_threads(event)
+        event = Event()
+        frequency_config = frequency
+        start_date_config = start_date
+        request_periodically(chosen_exchanges, chosen_currencies, event)
+        if(start_date != "None" and frequency != "None"):
+            request_history_periodically(chosen_exchanges, chosen_currencies, frequency, start_date, event)
 
     @classmethod
     def current_exchange_rate(cls, currency, exchange):
@@ -272,7 +240,6 @@ class SpotbitService(Service):
             date_s = int(date_start)
             date_e = int(date_end)
         else:
-            #error checking for malformed dates
             try:
                 date_s = (datetime.fromisoformat(date_start.replace("T", " "))).timestamp()*1000
                 date_e = (datetime.fromisoformat(date_end.replace("T", " "))).timestamp()*1000
@@ -285,18 +252,105 @@ class SpotbitService(Service):
         if ts != None and is_ms(int(ts[0])):
             statement = f"SELECT * FROM {exchange} WHERE timestamp > {date_s} AND timestamp < {date_e} AND pair = '{ticker}' ORDER BY timestamp DESC;"
         else:
-            # for some exchanges we cannot use ms precision timestamps (such as coinbase)
             date_s /= 1e3
             date_e /= 1e3
             statement = f"SELECT * FROM {exchange} WHERE timestamp > {date_s} AND timestamp < {date_e} AND pair = '{ticker}';"
-        # keep trying in case of database locked error
         while True:
             try:
                 cursor = db_n.execute(statement)
                 break
             except sqlite3.OperationalError as oe:
                 time.sleep(5)
-            
         res = cursor.fetchall()
         db_n.close()
         return {'columns': ['id', 'timestamp', 'datetime', 'currency_pair', 'open', 'high', 'low', 'close', 'vol'], 'data':res}
+    
+    
+    @classmethod
+    def status_info(cls):
+        p = Path("./sb.db")
+        status_info = []
+        db_n = sqlite3.connect(p, timeout=5)
+        info_check = False
+        for exchange in chosen_exchanges:
+            for currency in chosen_currencies[exchange]:
+                ticker = get_supported_pair_for(currency, objects[exchange])
+                if(ticker == '') :
+                    status_info.append([exchange, currency, 'Not Available'])
+                else:
+                    try:
+                        statement = f"SELECT * FROM {exchange} WHERE pair = '{ticker}' ORDER BY timestamp DESC LIMIT 1;"
+                        cursor = db_n.execute(statement)
+                        res = cursor.fetchone()
+                    except sqlite3.OperationalError:
+                        status_info.append([exchange, currency, 'Syncing'])
+                        info_check = True
+                    if res != None:
+                        difference = (datetime.now() - datetime.strptime(res[2], '%Y-%m-%d %H:%M:%S')).total_seconds()
+                        if(difference < 300):
+                            status_info.append([exchange, currency, 'Updated'])
+                        else:
+                            status_info.append([exchange, currency, 'Syncing'])
+                    else:
+                        if(not info_check):
+                            status_info.append([exchange, currency, 'Syncing'])
+                        else:
+                            info_check = False
+        db_n.close()
+        
+        
+        p = Path("./sb_hist.db")
+        db_n = sqlite3.connect(p, timeout=5)
+        info_check = False
+        for exchange in chosen_exchanges:
+            for currency in chosen_currencies[exchange]:
+                ticker = get_supported_pair_for(currency, objects[exchange])
+                if(ticker == '') :
+                    status_info.append([exchange, currency, 'Not Available'])
+                else:
+                    try:
+                        statement = f"SELECT * FROM {exchange} WHERE pair = '{ticker}' ORDER BY timestamp ASC LIMIT 1;"
+                        cursor = db_n.execute(statement)
+                        res = cursor.fetchone()
+                    except sqlite3.OperationalError:
+                        status_info.append([exchange, currency, 'Historical Data is Syncing'])
+                        info_check = True
+                    if res != None:
+                        difference = (datetime.fromtimestamp(start_date_config) - datetime.strptime(res[2], '%Y-%m-%d %H:%M:%S')).total_seconds()
+                        if(abs(difference) < 300):
+                            status_info.append([exchange, currency, 'Historical Data is Updated'])
+                        else:
+                            status_info.append([exchange, currency, 'Historical Data is Syncing'])
+                    else:
+                        if(not info_check):
+                            status_info.append([exchange, currency, 'Historical Data is Syncing'])
+                        else:
+                            info_check = False
+        return status_info
+    
+    @classmethod
+    def remove_exchange(cls, info):
+        global event
+        global chosen_currencies
+        clear_threads(event)
+        event = Event()
+        chosen_currencies[info[0].strip('\'')].remove(info[1].strip('\''))
+        request_periodically(chosen_exchanges, chosen_currencies, event)
+        request_history_periodically(chosen_exchanges, chosen_currencies, frequency_config, start_date_config, event)
+        
+    @classmethod
+    def remove_db(cls):
+        global event
+        global chosen_currencies
+        global chosen_exchanges
+        clear_threads(event)
+        event = Event()
+        time.sleep(1)
+        chosen_exchanges = []
+        chosen_currencies = {}
+        path = Path("./sb.db")
+        path_hist = Path("./sb_hist.db")
+        os.remove(path)
+        os.remove(path_hist)
+        
+        

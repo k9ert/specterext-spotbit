@@ -3,80 +3,183 @@
 {% set tab = 'index' %}
 {% block content %}
     <style>
-        .tagline {
-            font-style: italic;
-            font-size: 1.1em;
-            text-align: center;
-            color: #aaa;
-            padding-left: 4em;
-            padding-right: 4em;
-        }
 
-        .button_wide {
-            text-decoration: none;
-            color: white;
-        }
-        .button_wide:hover {
-            color: white;
-        }
-        .big_option {
-            display: inline-block;
-            width: 12em;
-            padding: 1em;
-            vertical-align: middle;
-            height: 3.5em;
-            border: 4px solid var(--cmap-border);
-            border-radius: 0.5em;
-            background-color: var(--cmap-bg-lighter);
-            font-size: 1.5em;
-            margin: 1em;
-            position: relative;
-        }
-        .big_option:hover {
-            background-color: var(--cmap-bg-lightest);
-            border: 4px solid var(--main-color);
-            cursor: pointer;
-        }
-
-        .big_option_text {
-            margin: 0;
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            -ms-transform: translate(-50%, -50%);
-            transform: translate(-50%, -50%);
-        }
-
-        .bonus {
-            color: #999;
-            font-size: 0.7em;
-            font-style: italic;
-        }
-
-        .highlights {
-            margin-top: 2em;
-            margin-bottom: 1.5em;
-        }
-
-        .show_list_bullet {
-            margin-top: 0.5em;
-            display: inline-block;
-            width: auto;
-        }
-        .show_list_bullet li {
+          table {
+            border-collapse: collapse;
+            margin: 25px 0;
+            font-size: 0.9em;
+            font-family: sans-serif;
+            min-width: 400px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
+          }
+        
+          thead tr {
+            background-color: var(--cmap-border-highlight);;
             text-align: left;
-            list-style-type: disc;
-            line-height: 1.7em;
-        }
+          }
 
-        .plus_sign {
-            font-size: 3em;
-            color: #ccc;
-            vertical-align: text-bottom;
-        }
+          td {
+            padding: 12px 15px;
+          }
+
+          tbody tr:nth-of-type(even) {
+            background-color: RoyalBlue;
+          }
+
+          tbody tr.active-row {
+            font-weight: bold;
+            color: #009879;
+          }
+
+          .removebtn {
+            border: none;
+            padding: 12px 16px;
+            font-size: 16px;
+            cursor: pointer;
+            width:10px !important;
+          }
+          
+          .cancelbtn, .deletebtn {
+            float: none;
+            width: 10%;
+          }
+          
+          .cancelbtn {
+            background-color: #ccc;
+            color: black;
+          }
+          
+          .deletebtn {
+            background-color: #f44336;
+          }
+          
+          .container {
+            background-color: RoyalBlue;
+            margin: 100px 100px;
+            padding: 16px;
+            text-align: center;
+          }
+          
+          .modal {
+            display: none;
+            position: fixed;
+            z-index: 1; /* Sit on top */
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #474e5d;
+            padding-top: 50px;
+          }
+          
+          .modal-content {
+            background-color: var(--cmap-bg);
+            margin: 5% auto 15% auto;
+            border: 1px solid #888;
+            width: 50%;
+          }
+          
+          hr {
+            border: 1px solid #f1f1f1;
+            margin-bottom: 25px;
+          }
+          
+          .close {
+            position: absolute;
+            right: 35px;
+            top: 15px;
+            font-size: 40px;
+            font-weight: bold;
+            color: #f1f1f1;
+          }
+          
+          .close:hover,
+          .close:focus {
+            color: #f44336;
+            cursor: pointer;
+          }
+          
+          .clearfix::after {
+            content: "";
+            clear: both;
+            display: table;
+          }
+
+          .button-clear {
+            all: unset;
+            cursor: pointer;
+          }
+
     </style>
     <br><br>
-    <div class="tagline">&ldquo; SpotbitService 4thewin.&rdquo;</div>
+    <div>
+        <form action="{{ url_for(service.get_blueprint_name() + '.index_post') }}" method="POST">
+        <table style="border: none; margin: 30px 0px;">
+            <thead>
+                <tr>
+                    <th style = "text-align:center">
+                      <button type = "button" class = "button-clear" onclick="document.getElementById('confirm-delete').style.display='block'">
+                        <img src="{{ url_for(service.id +'_endpoint' + '.static', filename="spotbit/img/close.svg") }}" style = "width:30px; height:30px;"/>
+                      </button>
+                      <div id="confirm-delete" class="modal" style = "padding:auto">
+                        <span onclick="document.getElementById('confirm-delete').style.display='none'" class="close" title="Close Modal">×</span>
+                              <div class="container">
+                                  <h1>Delete Stored Data</h1>
+                                  <p>Are you sure you want to delete all the data stored?</p>
+                                  
+                                  <div class="clearfix">
+                                      <button type="button" onclick="document.getElementById('confirm-delete').style.display='none'" class="cancelbtn">Cancel</button>
+                                      <button type="submit" name = "pair" value = "{{ element }}" onclick="document.getElementById('confirm-delete').style.display='none'" class="deletebtn">Delete</button>
+                                  </div>
+                              </div>
+                              <input type="hidden" class="csrf-token" name="csrf_token" value="{{ csrf_token() }}"/>
+                      </div>
+                    </th>
+                    <th>Exchange</th>
+                    <th>Currency</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for element in status %}
+                    <tr>
+                        <td style = "border:none">
+                            <button type = "button" class = "button-clear" onclick="document.getElementById('confirm-remove').style.display='block'">
+                              <img src="{{ url_for(service.id +'_endpoint' + '.static', filename="spotbit/img/stop_symbol.svg") }}" style = "width:40px;"/>
+                            </button>                
+                            <div id="confirm-remove" class="modal" style = "padding:auto">
+                              <span onclick="document.getElementById('confirm-remove').style.display='none'" class="close" title="Close Modal">×</span>
+                                    <div class="container">
+                                        <h1>Update configuration</h1>
+                                        <p>Are you sure you are no longer interested in the selected exchange currency pair?</p>
+                                        
+                                        <div class="clearfix">
+                                            <button type="button" onclick="document.getElementById('confirm-remove').style.display='none'" class="cancelbtn">Cancel</button>
+                                            <button type="submit" name = "pair" value = "{{ element }}" onclick="document.getElementById('confirm-remove').style.display='none'" class="deletebtn">Delete</button>
+                                        </div>
+                                    </div>
+                                    <input type="hidden" class="csrf-token" name="csrf_token" value="{{ csrf_token() }}"/>
+                            </div>
+                        </td>
+
+                        <td>
+                            {{ element[0] }}
+                        </td>
+
+                        <td>
+                            {{ element[1] }}
+                        </td>
+
+                        <td>
+                            {{ element[2] }}
+                        </td>
+
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </form>
+    </div>
 {% endblock %}
 
 
