@@ -4,22 +4,15 @@
 {% block content %}
     <style>
 
-          table {
-            border-collapse: collapse;
-            margin: 25px 0;
-            font-size: 0.9em;
-            font-family: sans-serif;
-            min-width: 400px;
-            box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
-          }
         
           thead tr {
-            background-color: var(--cmap-border-highlight);;
+            background-color: #00CAF1;
             text-align: left;
           }
 
-          td {
+          tr {
             padding: 12px 15px;
+            background-color: var(--cmap-border-highlight);
           }
 
           tbody tr:nth-of-type(even) {
@@ -63,7 +56,7 @@
           .modal {
             display: none;
             position: fixed;
-            z-index: 1; /* Sit on top */
+            z-index: 1;
             left: 0;
             top: 0;
             width: 100%;
@@ -125,11 +118,11 @@
                         <span onclick="document.getElementById('confirm-delete').style.display='none'" class="close" title="Close Modal">×</span>
                               <div class="container">
                                   <h1>Delete Stored Data</h1>
-                                  <p>Are you sure you want to delete all the data stored?</p>
+                                  <p>Are you sure you want to delete all of the stored data?</p>
                                   
                                   <div class="clearfix">
                                       <button type="button" onclick="document.getElementById('confirm-delete').style.display='none'" class="cancelbtn">Cancel</button>
-                                      <button type="submit" name = "pair" value = "{{ element }}" onclick="document.getElementById('confirm-delete').style.display='none'" class="deletebtn">Delete</button>
+                                      <button type="submit" name = "pair" onclick="document.getElementById('confirm-delete').style.display='none'" class="deletebtn">Delete</button>
                                   </div>
                               </div>
                               <input type="hidden" class="csrf-token" name="csrf_token" value="{{ csrf_token() }}"/>
@@ -144,18 +137,18 @@
                 {% for element in status %}
                     <tr>
                         <td style = "border:none">
-                            <button type = "button" class = "button-clear" onclick="document.getElementById('confirm-remove').style.display='block'">
+                            <button type = "button" class = "button-clear" value = "{{ element }}" onclick="deleteExchange(this.value)">
                               <img src="{{ url_for(service.id +'_endpoint' + '.static', filename="spotbit/img/stop_symbol.svg") }}" style = "width:40px;"/>
                             </button>                
                             <div id="confirm-remove" class="modal" style = "padding:auto">
                               <span onclick="document.getElementById('confirm-remove').style.display='none'" class="close" title="Close Modal">×</span>
                                     <div class="container">
                                         <h1>Update configuration</h1>
-                                        <p>Are you sure you are no longer interested in the selected exchange currency pair?</p>
+                                        <p>Are you sure you are no longer interested in this data?</p>
                                         
                                         <div class="clearfix">
                                             <button type="button" onclick="document.getElementById('confirm-remove').style.display='none'" class="cancelbtn">Cancel</button>
-                                            <button type="submit" name = "pair" value = "{{ element }}" onclick="document.getElementById('confirm-remove').style.display='none'" class="deletebtn">Delete</button>
+                                            <button type="submit" name = "pair" id = "pair" onclick="document.getElementById('confirm-remove').style.display='none'" class="deletebtn">Delete</button>
                                         </div>
                                     </div>
                                     <input type="hidden" class="csrf-token" name="csrf_token" value="{{ csrf_token() }}"/>
@@ -186,5 +179,9 @@
 
 {% block scripts %}
     <script>
+      function deleteExchange(info) {
+          document.getElementById('confirm-remove').style.display = 'block';
+          document.getElementById("pair").value = info;
+      }
     </script>
 {% endblock %}

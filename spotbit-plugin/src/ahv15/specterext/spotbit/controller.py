@@ -77,8 +77,8 @@ def settings_post():
     currency8 = request.form.get('currency8', "None")
     currency9 = request.form.get('currency9', "None")
     start_date = request.form.get('start_date', "None")
-    frequencies = request.form.get('frequencies', "None")
+    frequencies = request.form.get('frequencies', "1m")
     service = ext()
     service.init_table([exchange.lower()], [currency1, currency2, currency3, currency4, currency5, currency6,
-                       currency7, currency8, currency9], frequencies, datetime.timestamp(datetime.strptime(start_date, '%Y-%m-%d')))
+                       currency7, currency8, currency9], frequencies, start_date)
     return redirect(url_for(f"{ SpotbitService.get_blueprint_name()}.settings_get"))
